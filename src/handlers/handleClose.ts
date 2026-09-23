@@ -1,17 +1,25 @@
 import {TourGuideClient} from "../Tour";
 
-async function handleClose(this: TourGuideClient) {
-    return new Promise(async (resolve, reject) => {
+/**
+ * handleClose
+ *
+ * Closes the tour: hides dialog/backdrop, removes listeners, and
+ * triggers exit callbacks.
+ *
+ * Uses the dedicated `_exitLock` (separate from `_navigationLock`) so
+ * the tour can be closed even while a navigation is in progress.
+ */
+async function handleClose(this: TourGuideClient): Promise<true> {
+    if (this._exitLock) {
+        throw new Error("Promise waiting")
+    }
 
-        if (this._promiseWaiting) return reject("Promise waiting")
-        this._promiseWaiting = true
-
-        // After change callback - global
-        if (this._globalBeforeExitCallback) try {
+    this._exitLock = true
+    try {
+        if (this._globalBeforeExitCallback) {
             await this._globalBeforeExitCallback()
-        } catch (e) {
-            return reject(e)
         }
+
         this.dialog.style.display = "none"
         this.backdrop.style.display = "none"
         this.isVisible = false
@@ -19,18 +27,20 @@ async function handleClose(this: TourGuideClient) {
 
         if (this.options.debug) console.info("Tour exited")
 
-        document.body.classList.remove('tg-no-interaction');
+        document.body.classList.remove('tg-no-interaction')
 
         await this.destroyListeners()
 
-        setTimeout(() => {
-            if (this._globalAfterExitCallback) this._globalAfterExitCallback()
-        }, 0)
+        return true
+    } finally {
+        this._exitLock = false
 
-        this._promiseWaiting = false
-
-        return resolve(true)
-    })
+        if (this._globalAfterExitCallback) {
+            Promise.resolve(this._globalAfterExitCallback()).catch((e) => {
+                if (this.options.debug) console.warn(e)
+            })
+        }
+    }
 }
 
 export default handleClose

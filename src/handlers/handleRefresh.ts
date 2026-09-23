@@ -5,15 +5,22 @@ import waitForElm from "../util/util_wait_for_element";
 
 /**
  * handleRefreshTour
+ *
+ * Fully recomputes tour steps, backdrop attributes and the dialog.
+ * Used e.g. after dynamic DOM changes that introduce or remove
+ * `data-tg-tour` elements.
  */
-async function handleRefreshTour(this: TourGuideClient) {
-    return new Promise(async (resolve, reject) => {
+async function handleRefreshTour(this: TourGuideClient): Promise<true> {
+    if (this._navigationLock) {
+        throw new Error("Promise waiting")
+    }
+
+    this._navigationLock = true
+    try {
         /**
          * Tour steps
          */
-        await computeTourSteps(this).catch((e)=>{
-            return reject(e)
-        })
+        await computeTourSteps.call(this)
 
         /**
          * Backdrop
@@ -23,64 +30,71 @@ async function handleRefreshTour(this: TourGuideClient) {
         /**
          * Dialog
          */
-        await this.refreshDialog().catch((e)=>{
-            return reject(e)
-        })
+        await this.refreshDialog()
 
-
-        return resolve(true)
-    })
+        return true
+    } finally {
+        this._navigationLock = false
+    }
 }
 
 /**
  * handleRefreshDialog
+ *
+ * Fully re-renders the dialog HTML (e.g. after an options update) and
+ * refreshes content, position and event listeners.
+ *
+ * NOTE: No lock check here, since this function is used both
+ * standalone (public API `tour.refreshDialog()`) and from within
+ * `handleRefreshTour` (already locked there). No `activeStep`/
+ * `tourSteps` mutation happens here - only a DOM refresh.
  */
-async function handleRefreshDialog(this: TourGuideClient) {
-    return new Promise(async (resolve, reject) => {
+async function handleRefreshDialog(this: TourGuideClient): Promise<true> {
+    /**
+     * Hard-refresh dialog HTML - for option updates or manual refresh calls
+     */
+    try {
+        const htmlResp = await renderDialogHtml.call(this)
+        if (htmlResp) this.dialog.innerHTML = htmlResp
+    } catch (e) {
+        if (this.options.debug) console.warn(e)
+    }
 
-        /**
-         * Hard refresh dialog HTML - for option updates or hard refresh methods
-         */
-        await renderDialogHtml(this).then((htmlResp)=>{
-            if(htmlResp) this.dialog.innerHTML = htmlResp
-        }).catch((e)=>{
-            if(this.options.debug) console.warn(e)
-        })
+    /**
+     * Update dialog content
+     */
+    try {
+        await updateDialogHtml.call(this)
+    } catch (e) {
+        if (this.options.debug) console.warn(e)
+        throw e
+    }
 
-        /**
-         * Update tour guide HTML
-         */
-        await updateDialogHtml(this).catch((e)=>{
-            if(this.options.debug) console.warn(e)
-            reject(e)
-        })
+    /**
+     * Update backdrop & dialog positions & display
+     */
+    await this.updatePositions()
 
-        /**
-         * Update backdrop & dialog positions & display
-         */
-        await this.updatePositions()
-
-
-        /**
-         * Ensure dialog is visible & rendered in DOM
-         */
-        if(this.isVisible) await waitForElm('.tg-dialog').then(async () => {
-            /**
-             * Re-Init listeners
-             * Double initialization is handled inside of handler
-             */
+    /**
+     * Ensure dialog is visible & rendered in the DOM
+     */
+    if (this.isVisible) {
+        await waitForElm('.tg-dialog', this.options.elementTimeout).then(async () => {
             await this.destroyListeners()
             await this.initListeners()
 
-            // Add transition class to dialog after additional delay to prevent flying in from random position
+            // NOTE: intentionally kept disabled, see handleAddStep.ts
             // if (this.options.dialogAnimate) setTimeout(() => {
             //     this.dialog.classList.add('animate-position')
             // }, 600)
 
             return true
+        }).catch((e) => {
+            if (this.options.debug) console.warn(e)
         })
-        return resolve(true)
-    })
+    }
+
+    return true
 }
 
 export default handleRefreshTour

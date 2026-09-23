@@ -1,22 +1,29 @@
 import {TourGuideClient} from "../Tour";
 
 /**
- * clickOutsideHandler
- * @param event : MouseEvent
+ * Checks whether a point (e.g. click coordinates) lies within a rect.
  */
-const clickOutsideHandler = async function (this : TourGuideClient, event: MouseEvent){
-    // abort if did not click an element
+function isPointInRect(x: number, y: number, rect: DOMRect): boolean {
+    return x >= rect.x && x <= rect.x + rect.width
+        && y >= rect.y && y <= rect.y + rect.height
+}
+
+/**
+ * clickOutsideHandler
+ */
+const clickOutsideHandler = async function (this: TourGuideClient, event: MouseEvent) {
     if (!(event.target instanceof Element)) return
 
-    // Ignore clicks inside backdrop focus area
+    // Ignore clicks inside the backdrop focus area
     const backdropRect = this.backdrop.getBoundingClientRect()
-    if (event.clientX >= backdropRect.x && event.clientX <= (backdropRect.x + backdropRect.width) && event.clientY >= backdropRect.y && event.clientY <= (backdropRect.y + backdropRect.height)) return;
+    if (isPointInRect(event.clientX, event.clientY, backdropRect)) return
 
-    // Ignore clicks inside dialog area
+    // Ignore clicks inside the dialog area
     const dialogRect = this.dialog.getBoundingClientRect()
-    if (event.clientX >= dialogRect.x && event.clientX <= (dialogRect.x + dialogRect.width) && event.clientY >= dialogRect.y && event.clientY <= (dialogRect.y + dialogRect.height)) return;
+    if (isPointInRect(event.clientX, event.clientY, dialogRect)) return
 
-    // Ignore clicks on the dialog
+    // Ignore clicks on the dialog itself (fallback for elements rendered
+    // outside the dialog's visual rect, e.g. portal-based dropdowns)
     if (this.dialog.contains(event.target)) return
 
     event.preventDefault()
@@ -27,219 +34,165 @@ const clickOutsideHandler = async function (this : TourGuideClient, event: Mouse
 
 /**
  * keyPressHandler
- * @param event : KeyboardEvent
  */
-const keyPressHandler = async function (this : TourGuideClient, event: KeyboardEvent){
-
-    // Still handle options independently as keyPress handler is enabled when either options detected
-
-    // Escape
+const keyPressHandler = async function (this: TourGuideClient, event: KeyboardEvent) {
     if (event.key === "Escape" && this.options.exitOnEscape) {
         event.preventDefault()
         await this.exit()
-        return;
+        return
     }
-    // Next
+
     if (event.key === "ArrowRight" && this.options.keyboardControls) {
         event.preventDefault()
         this.visitStep("next").catch((e) => {
             if (this.options.debug) console.warn(e)
         })
-        return;
+        return
     }
-    // Prev
+
     if (event.key === "ArrowLeft" && this.options.keyboardControls) {
         event.preventDefault()
         this.visitStep("prev").catch((e) => {
             if (this.options.debug) console.warn(e)
         })
-        return;
+        return
     }
+}
+
+type TrackedEventKey = keyof TourGuideClient["_trackedEvents"]
+
+/**
+ * Describes HOW a tracked event is attached/detached:
+ * - getTarget: returns the DOM element/window the listener binds to
+ *   (as a function, since e.g. dialog buttons are re-created in the
+ *   DOM on every step change)
+ * - eventName: the native event name
+ * - options: addEventListener options (e.g. passive for scroll/resize)
+ */
+interface ListenerDefinition {
+    getTarget: () => EventTarget | null
+    eventName: string
+    options?: boolean | AddEventListenerOptions
+}
+
+const listenerDefinitions: Record<TrackedEventKey, ListenerDefinition> = {
+    nextBtnClickEvent: {
+        getTarget: () => document.getElementById("tg-dialog-next-btn"),
+        eventName: "click",
+    },
+    prevBtnClickEvent: {
+        getTarget: () => document.getElementById("tg-dialog-prev-btn"),
+        eventName: "click",
+    },
+    closeBtnClickEvent: {
+        getTarget: () => document.getElementById("tg-dialog-close-btn"),
+        eventName: "click",
+    },
+    outsideClickEvent: {
+        getTarget: () => document.body,
+        eventName: "click",
+        // not passive: handler calls preventDefault()
+    },
+    keyPressEvent: {
+        getTarget: () => window,
+        eventName: "keydown",
+        // not passive: handler calls preventDefault()
+    },
+    resizeEvent: {
+        getTarget: () => window,
+        eventName: "resize",
+        options: {passive: true},
+    },
+    scrollEvent: {
+        getTarget: () => window,
+        eventName: "scroll",
+        options: {passive: true},
+    },
+}
+
+/**
+ * attachTrackedEvent
+ * Attaches exactly one tracked event listener, provided the target
+ * element exists and the listener isn't already initialized.
+ */
+function attachTrackedEvent(this: TourGuideClient, key: TrackedEventKey): void {
+    const tracked = this._trackedEvents[key]
+    if (tracked.initialized) return
+
+    const def = listenerDefinitions[key]
+    const target = def.getTarget()
+    if (!target) return
+
+    target.addEventListener(def.eventName, tracked.fn as EventListener, def.options)
+    tracked.initialized = true
+}
+
+/**
+ * detachTrackedEvent
+ * Removes exactly one tracked event listener, provided it's currently
+ * initialized.
+ */
+function detachTrackedEvent(this: TourGuideClient, key: TrackedEventKey): void {
+    const tracked = this._trackedEvents[key]
+    if (!tracked.initialized) return
+
+    const def = listenerDefinitions[key]
+    const target = def.getTarget()
+    if (target) {
+        target.removeEventListener(def.eventName, tracked.fn as EventListener, def.options)
+    }
+    tracked.initialized = false
 }
 
 /**
  * handleInitListeners
  */
-function handleInitListeners(this : TourGuideClient) {
-
-    /** Next btn **/
-    const initNextBtnListener = ()=>{
-        let nextBtn = document.getElementById("tg-dialog-next-btn");
-        if (!nextBtn || this._trackedEvents['nextBtnClickEvent'].initialized) return
-        nextBtn.addEventListener("click", this._trackedEvents.nextBtnClickEvent.fn)
-        this._trackedEvents['nextBtnClickEvent'].initialized = true
+async function handleInitListeners(this: TourGuideClient): Promise<true> {
+    if (this.options.showButtons) {
+        attachTrackedEvent.call(this, "nextBtnClickEvent")
+        attachTrackedEvent.call(this, "prevBtnClickEvent")
     }
-
-    /** Prev btn **/
-    const initPrevBtnListener = ()=>{
-        let prevBtn = document.getElementById("tg-dialog-prev-btn");
-        if (!prevBtn || this._trackedEvents['prevBtnClickEvent'].initialized) return
-        prevBtn.addEventListener("click", this._trackedEvents.prevBtnClickEvent.fn)
-        this._trackedEvents['prevBtnClickEvent'].initialized = true
+    if (this.options.closeButton) {
+        attachTrackedEvent.call(this, "closeBtnClickEvent")
     }
-
-    /** Close btn **/
-    const initCloseBtnListener = ()=>{
-        let closeBtn = document.getElementById("tg-dialog-close-btn");
-        if (!closeBtn || this._trackedEvents['closeBtnClickEvent'].initialized) return
-        closeBtn.addEventListener("click", this._trackedEvents.closeBtnClickEvent.fn, false)
-        this._trackedEvents['closeBtnClickEvent'].initialized = true
+    if (this.options.exitOnClickOutside) {
+        attachTrackedEvent.call(this, "outsideClickEvent")
     }
-
-    /** Click outside **/
-    const initClickOutsideListener = ()=>{
-        if (this._trackedEvents['outsideClickEvent'].initialized) return
-        // setTimeout(() => {
-            document.body.addEventListener('click', this._trackedEvents.outsideClickEvent.fn, false)
-        this._trackedEvents['outsideClickEvent'].initialized = true
-        // }, 300)
+    if (this.options.keyboardControls || this.options.exitOnEscape) {
+        attachTrackedEvent.call(this, "keyPressEvent")
     }
+    attachTrackedEvent.call(this, "resizeEvent")
+    attachTrackedEvent.call(this, "scrollEvent")
 
-    /** Key press **/
-    const initKeysListener = ()=>{
-        if (this._trackedEvents['keyPressEvent'].initialized) return
-        window.addEventListener("keydown", this._trackedEvents.keyPressEvent.fn, false);
-        this._trackedEvents['keyPressEvent'].initialized = true
-    }
-
-    /** Resize **/
-    const initResizeListener = ()=>{
-        if (this._trackedEvents['resizeEvent'].initialized) return
-        window.addEventListener("resize", this._trackedEvents.resizeEvent.fn, false);
-        this._trackedEvents['resizeEvent'].initialized = true
-    }
-
-    /** Scroll **/
-    const initScrollListener = ()=>{
-        if (this._trackedEvents['scrollEvent'].initialized) return
-        window.addEventListener("scroll", this._trackedEvents.scrollEvent.fn, false);
-        this._trackedEvents['scrollEvent'].initialized = true
-    }
-
-
-    /**
-     * Primary method
-     */
-    return new Promise((resolve) => {
-        /**
-         * Setup click events for next, prev & close buttons
-         */
-
-        // Next btn
-        if (this.options.showButtons) initNextBtnListener()
-        // Prev btn
-        if (this.options.showButtons) initPrevBtnListener()
-        // Close btn
-        if (this.options.closeButton) initCloseBtnListener()
-        // Dialog click outside
-        if (this.options.exitOnClickOutside) initClickOutsideListener()
-
-        /**
-         * Setup listeners for keyboard controls
-         */
-        if (this.options.keyboardControls || this.options.exitOnEscape) initKeysListener()
-
-        /**
-         * Setup listeners for window resize
-         */
-        initResizeListener()
-
-        /**
-         * Setup listeners for scroll
-         */
-        initScrollListener()
-
-        return resolve(true)
-    })
+    return true
 }
 
 /**
  * handleDestroyListeners
  */
-function handleDestroyListeners(this : TourGuideClient){
-    // Destroy listener
-    const destroyNextBtnListener = ()=>{
-        let nextBtn = document.getElementById("tg-dialog-next-btn");
-        if (nextBtn) {
-            nextBtn.removeEventListener("click", this._trackedEvents.nextBtnClickEvent.fn);
-            this._trackedEvents['nextBtnClickEvent'].initialized = false
-        }
+async function handleDestroyListeners(this: TourGuideClient): Promise<true> {
+    if (this.options.showButtons) {
+        detachTrackedEvent.call(this, "nextBtnClickEvent")
+        detachTrackedEvent.call(this, "prevBtnClickEvent")
     }
-
-    const destroyPrevBtnListener = ()=>{
-        let prevBtn = document.getElementById("tg-dialog-prev-btn");
-        if (prevBtn) {
-            prevBtn.removeEventListener("click", this._trackedEvents.prevBtnClickEvent.fn);
-            this._trackedEvents['prevBtnClickEvent'].initialized = false
-        }
+    if (this.options.closeButton) {
+        detachTrackedEvent.call(this, "closeBtnClickEvent")
     }
-
-    const destroyCloseBtnListener = ()=>{
-        let closeBtn = document.getElementById("tg-dialog-close-btn");
-        if (closeBtn) {
-            closeBtn.removeEventListener("click", this._trackedEvents.closeBtnClickEvent.fn, false)
-            this._trackedEvents['closeBtnClickEvent'].initialized = false
-        }
+    if (this.options.exitOnClickOutside) {
+        detachTrackedEvent.call(this, "outsideClickEvent")
     }
-
-    const destroyClickOutsideListener = ()=>{
-        document.body.removeEventListener('click', this._trackedEvents.outsideClickEvent.fn, false)
-        this._trackedEvents['outsideClickEvent'].initialized = false
+    if (this.options.keyboardControls || this.options.exitOnEscape) {
+        detachTrackedEvent.call(this, "keyPressEvent")
     }
+    detachTrackedEvent.call(this, "resizeEvent")
+    detachTrackedEvent.call(this, "scrollEvent")
 
-    const destroyKeysListener = ()=>{
-        window.removeEventListener("keydown", this._trackedEvents.keyPressEvent.fn, false);
-        this._trackedEvents['keyPressEvent'].initialized = false
-    }
-
-    const destroyResizeListener = ()=>{
-        window.removeEventListener("resize", this._trackedEvents.resizeEvent.fn, false);
-        this._trackedEvents['resizeEvent'].initialized = false
-    }
-
-    const destroyScrollListener = ()=>{
-        window.removeEventListener("scroll", this._trackedEvents.scrollEvent.fn, false);
-        this._trackedEvents['scrollEvent'].initialized = false
-    }
-
-    return new Promise((resolve) => {
-        /**
-         * Destroy click events for next, prev & close buttons
-         */
-        // Next btn
-        if (this.options.showButtons) destroyNextBtnListener()
-        // Prev btn
-        if (this.options.showButtons) destroyPrevBtnListener()
-        // // Close btn
-        if (this.options.closeButton) destroyCloseBtnListener()
-        // // Dialog click outside
-        if (this.options.exitOnClickOutside) destroyClickOutsideListener()
-
-        /**
-         * Destroy listeners for keyboard controls
-         */
-        if (this.options.keyboardControls || this.options.exitOnEscape) destroyKeysListener()
-
-        /**
-         * Destroy listeners for window resize
-         */
-        destroyResizeListener()
-
-        /**
-         * Destroy listeners for scroll
-         */
-        destroyScrollListener()
-
-        return resolve(true)
-    })
+    return true
 }
 
 export {
-    // Init
     handleInitListeners,
-    // Destroy
     handleDestroyListeners,
-    // Handlers
     clickOutsideHandler,
     keyPressHandler,
 }

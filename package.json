@@ -4,11 +4,15 @@
   "description": "A customizable tour guide library for front-end applications.",
   "homepage": "https://tourguidejs.com",
   "main": "dist/tour.js",
-  "types": "src/Tour.d.ts",
+  "types": "dist/tourguide.d.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "watch": "webpack --config webpack.config.js --watch",
-    "build": "webpack --config webpack.config.js && cp src/Tour.d.ts dist/tour.d.ts"
+    "watch": "webpack --config webpack.config.js --mode development --watch",
+    "build:js": "webpack --config webpack.config.js",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build:rollup-types": "api-extractor run --local",
+    "build": "npm run build:js && npm run build:types && npm run build:rollup-types",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "tour"
@@ -16,21 +20,30 @@
   "author": "JC",
   "license": "MIT",
   "dependencies": {
+    "@floating-ui/core": "^1.0.1",
     "@floating-ui/dom": "^1.0.3",
-    "sass": "^1.55.0"
   },
   "devDependencies": {
+    "@microsoft/api-extractor": "^7.x",
     "@types/node": "^18.11.7",
-    "file-loader": "^6.2.0",
-    "node-sass": "^8.0.0",
+    "css-loader": "^6.x",
+    "mini-css-extract-plugin": "^2.x",
+    "sass": "^1.55.0",
     "sass-loader": "^13.2.0",
     "ts-loader": "^9.4.1",
-    "typescript": "^4.8.4",
+    "typescript": "^4.9.5",
     "webpack": "^5.75.0",
     "webpack-cli": "^4.10.0"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/sjmc11/tourguide-js"
-  }
+  },
+  "files": [
+    "dist/tour.js",
+    "dist/tour.js.map",
+    "dist/css/tour.min.css",
+    "dist/css/tour.min.css.map",
+    "dist/tourguide.d.ts"
+  ]
 }

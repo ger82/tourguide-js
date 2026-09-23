@@ -3,77 +3,90 @@ import {TourGuideClient} from "../Tour";
 /**
  * createTourGuideBackdrop
  */
-function createTourGuideBackdrop(this : TourGuideClient){
+function createTourGuideBackdrop(this: TourGuideClient) {
     this.backdrop = document.createElement('div')
     this.computeBackdropAttributes()
-    // Append to body
     document.body.append(this.backdrop)
 }
 
 /**
  * computeBackdropAttributes
  */
-function computeBackdropAttributes(this : TourGuideClient){
-    // TS build strict check
-    if(!this.options) return
-    // Base class
-    this.backdrop.className = 'tg-backdrop' // Reset
-    // Backdrop colour
-    this.backdrop.style.boxShadow = this.options.backdropColor + ' 0 0 1px 2px, ' + this.options.backdropColor + ' 0 0 0 1000vh';
-    // Custom dialog class
-    if(this.options.backdropClass) this.backdrop.classList.add(this.options.backdropClass)
-    // Animation class
-    if(this.options.dialogAnimate) this.backdrop.classList.add('tg-backdrop-animate')
-    // Allow interaction
-    if(this.options.activeStepInteraction) this.backdrop.classList.add('allow-interaction')
+function computeBackdropAttributes(this: TourGuideClient) {
+    if (!this.options) return
 
+    this.backdrop.className = 'tg-backdrop' // reset
+    this.backdrop.style.boxShadow = this.options.backdropColor + ' 0 0 1px 2px, ' + this.options.backdropColor + ' 0 0 0 1000vh';
+
+    if (this.options.backdropClass) this.backdrop.classList.add(this.options.backdropClass)
+    if (this.options.backdropAnimate) this.backdrop.classList.add('tg-backdrop-animate')
+    if (this.options.activeStepInteraction) this.backdrop.classList.add('allow-interaction')
 }
 
-function computeBackdropPosition(tgInstance : TourGuideClient){
-    return new Promise(async (resolve, reject) => {
-        // TS build strict check
-        if(typeof tgInstance.options.targetPadding === "undefined") return reject("Options failed to initialize")
-        if(!tgInstance.backdrop) return reject("No backdrop element initialized")
+/**
+ * computeBackdropPosition
+ *
+ * Positions and sizes the backdrop overlay around the current step's
+ * target element.
+ *
+ * @this TourGuideClient
+ */
+async function computeBackdropPosition(this: TourGuideClient): Promise<true> {
+    if (typeof this.options.targetPadding === "undefined") {
+        throw new Error("Options failed to initialize")
+    }
+    if (!this.backdrop) {
+        throw new Error("No backdrop element initialized")
+    }
 
-        const stepData = tgInstance.tourSteps[tgInstance.activeStep]
-        const targetElem = stepData.target as HTMLElement
-        const targetElemRect = targetElem.getBoundingClientRect()
+    const stepData = this.tourSteps[this.activeStep]
+    if (!stepData) {
+        throw new Error(`No step found at index ${this.activeStep}`)
+    }
 
-        // if backdrop overlay extends window width with padding - do not apply additional padding if overflows
-        const isOverflow = (targetElemRect.width + tgInstance.options.targetPadding) > document.documentElement.clientWidth
+    const targetElem = stepData.target
+    if (!(targetElem instanceof HTMLElement)) {
+        throw new Error("Step target is not a valid HTMLElement")
+    }
 
+    const targetElemRect = targetElem.getBoundingClientRect()
+    const padding = this.options.targetPadding
+    const halfPadding = padding / 2
 
-        if(targetElem === document.body){
-            // Center & cover entire page if body
-            const centeredOverlaySize = 0
-            targetElemRect.width = centeredOverlaySize
-            targetElemRect.height = centeredOverlaySize
-            tgInstance.backdrop.style.position = "fixed"
-            tgInstance.backdrop.style.top = ((window.innerHeight / 2.5)) + "px"
-            tgInstance.backdrop.style.left = ((window.innerWidth / 2)) + "px"
-            // Disable resize detection
-            // window.onresize = null
-        } else if (stepData.fixed){
-            tgInstance.backdrop.style.position = "fixed"
-            tgInstance.backdrop.style.top = targetElemRect.top - (tgInstance.options.targetPadding / 2) + "px"
-            tgInstance.backdrop.style.left = (isOverflow ? targetElemRect.x : targetElemRect.x - (tgInstance.options.targetPadding / 2)) + "px"
-        } else {
-            tgInstance.backdrop.style.position = "absolute"
-            // Set position to match target
-            tgInstance.backdrop.style.top = window.scrollY + targetElemRect.top - (tgInstance.options.targetPadding / 2) + "px"
-            tgInstance.backdrop.style.left = (isOverflow ? targetElemRect.x : targetElemRect.x - (tgInstance.options.targetPadding / 2)) + "px"
-            // Enable resize detection
-        }
+    // If the backdrop overlay would extend beyond window width with
+    // padding applied, skip the extra padding to avoid overflow.
+    const isOverflow = (targetElemRect.width + padding) > document.documentElement.clientWidth
 
-        // Propagation of event inside highlighted area
-        tgInstance.backdrop.style.pointerEvents = stepData.propagateEvents ? 'none' : '';
-        // Prevent overlay being wider than screen
-        tgInstance.backdrop.style.width = (isOverflow ? targetElemRect.width : (targetElemRect.width + tgInstance.options.targetPadding)) + "px"
-        // Set height
-        tgInstance.backdrop.style.height = (targetElemRect.height ? targetElemRect.height + (tgInstance.options.targetPadding) : targetElemRect.height) + "px"
+    if (targetElem === document.body) {
+        const centeredWidth = 0
+        const centeredHeight = 0
 
-        resolve(true)
-    })
+        this.backdrop.style.position = "fixed"
+        this.backdrop.style.top = (window.innerHeight / 2.5) + "px"
+        this.backdrop.style.left = (window.innerWidth / 2) + "px"
+        this.backdrop.style.width = centeredWidth + "px"
+        this.backdrop.style.height = centeredHeight + "px"
+
+        this.backdrop.style.pointerEvents = stepData.propagateEvents ? 'none' : ''
+
+        return true
+    }
+
+    if (stepData.fixed) {
+        this.backdrop.style.position = "fixed"
+        this.backdrop.style.top = (targetElemRect.top - halfPadding) + "px"
+        this.backdrop.style.left = (isOverflow ? targetElemRect.x : targetElemRect.x - halfPadding) + "px"
+    } else {
+        this.backdrop.style.position = "absolute"
+        this.backdrop.style.top = (window.scrollY + targetElemRect.top - halfPadding) + "px"
+        this.backdrop.style.left = (isOverflow ? targetElemRect.x : targetElemRect.x - halfPadding) + "px"
+    }
+
+    this.backdrop.style.pointerEvents = stepData.propagateEvents ? 'none' : ''
+    this.backdrop.style.width = (isOverflow ? targetElemRect.width : (targetElemRect.width + padding)) + "px"
+    this.backdrop.style.height = (targetElemRect.height ? targetElemRect.height + padding : targetElemRect.height) + "px"
+
+    return true
 }
 
 export {createTourGuideBackdrop, computeBackdropAttributes, computeBackdropPosition}

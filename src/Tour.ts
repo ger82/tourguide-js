@@ -17,7 +17,7 @@ import {computeBackdropAttributes, computeBackdropPosition, createTourGuideBackd
 import {handleOnAfterExit, handleOnAfterStepChange, handleOnBeforeExit, handleOnBeforeStepChange, handleOnFinish} from "./core/callbacks";
 import {clickOutsideHandler, handleDestroyListeners, handleInitListeners, keyPressHandler} from "./core/listeners";
 // Step Type
-import {TourGuideStep} from "./types/TourGuideStep";
+import type {TourGuideStep} from "./types/TourGuideStep";
 // HANDLERS
 import handleVisitStep, {handleVisitNextStep, handleVisitPrevStep} from "./handlers/handleVisitStep";
 import handleAddStep from "./handlers/handleAddStep";
@@ -27,54 +27,83 @@ import handleClose from "./handlers/handleClose";
 import handleRefreshTour, {handleRefreshDialog} from "./handlers/handleRefresh";
 import handleFinishTour, {delFinishedTour, getIsFinished} from "./handlers/handleFinishTour";
 // UTIL
-import defaultOptions from "./util/util_default_options";
+import getDefaultOptions from "./util/util_default_options";
+import "./scss/tour.scss";
 
-// Tour
-class TourGuideClient{
+/**
+ * TourGuideClient
+ *
+ * Main class of the TourGuide.js library - creates and controls a
+ * guided tour over DOM elements of a page.
+ *
+ * @public
+ */
+class TourGuideClient {
     /**
      * Primary elements
      */
-    backdrop : HTMLElement
-    dialog : HTMLElement
+    backdrop: HTMLElement
+    dialog: HTMLElement
 
     /**
-     * Default Attributes
+     * Default attributes
      */
     group: string = ""
     isVisible: boolean = false
     activeStep: number = 0
     tourSteps: TourGuideStep[] = []
-    options: TourGuideOptions = defaultOptions
-    isFinished = getIsFinished
+    options: TourGuideOptions = getDefaultOptions()
+
+    isFinished: (tourGroup?: string) => boolean = getIsFinished
 
     /**
-     * Private
-     * @private
-     * promiseWaiting - used to wait for async functions to complete
+     * @internal
+     * Lock for navigation operations (step changes, adding steps, tour
+     * completion, refresh, options updates). Prevents overlapping
+     * mutations of `activeStep`/`tourSteps`.
      */
-    _promiseWaiting = false
+    _navigationLock = false
+
+    /**
+     * @internal
+     * Separate lock for the exit flow (see handleClose.ts). Intentionally
+     * decoupled from `_navigationLock` so the tour can still be closed
+     * while a navigation is in progress (e.g. from within a beforeEnter
+     * hook).
+     */
+    _exitLock = false
+
+    /**
+     * @internal
+     * Cache for computeDots() - avoids unnecessary recomputation when
+     * activeStep/tourSteps haven't changed (e.g. on resize/scroll).
+     */
+    _dotsCache?: { key: string; html: string }
 
     /**
      * Constructor
-     * @param options
+     *
+     * @param options - Optional configuration merged with the default options
      */
     constructor(options?: TourGuideOptions) {
         this.dialog = document.createElement('div')
         this.backdrop = document.createElement('div')
-        this.options = defaultOptions
-        if(options) Object.assign(this.options, options) // overwrite default options
-        // if(steps) this.options.steps = steps // defined steps array
-        this.createTourGuideDialog().catch((e)=>{
-            if(this.options.debug) console.warn(e)
+
+        // Clone default options instead of sharing a reference.
+        this.options = {...getDefaultOptions(), ...options}
+
+        this.createTourGuideDialog().catch((e) => {
+            if (this.options.debug) console.warn(e)
         })
         this.createTourGuideBackdrop()
     }
 
     /**
-     * Backdrop / Target highlighter
+     * Backdrop / target highlighter
      */
     private createTourGuideBackdrop = createTourGuideBackdrop
-    computeBackdropAttributes = computeBackdropAttributes
+
+    computeBackdropAttributes: () => void = computeBackdropAttributes
 
     /**
      * Dialog
@@ -83,30 +112,42 @@ class TourGuideClient{
 
 
     /**
-     * Methods
-      */
-    start = handleTourStart // Start the tour - compute steps -> goToStep (checks -> update dialog html, dialog & backdrop) -> initListeners()
-    visitStep = handleVisitStep // visit step by stepIndex or `next` | `prev`
-    addSteps = handleAddStep // Push new steps to the tour
-    nextStep = handleVisitNextStep // navigate to next step - also handles calling finishTour() on final step
-    prevStep = handleVisitPrevStep // navigate to previous step
-    exit = handleClose // exit the tour
-    refresh = handleRefreshTour // Recompute everything including tour guide steps
-    refreshDialog = handleRefreshDialog // Recompute the dialog content & backdrop only
-    finishTour = handleFinishTour // Set tour as complete in localStorage & exit - pass group key
-    updatePositions = computeTourPositions // Set tour as complete in localStorage & exit - pass group key
-    deleteFinishedTour = delFinishedTour // Remove a completed tour from localStorage. Pass group key or `all` to clear.
-    setOptions = handleSetOptions // Update tour options & refresh dialog + backdrop
+     * Public methods
+     *
+     * NOTE: All methods use explicit, narrow type annotations instead of
+     * relying on the function types TypeScript would otherwise infer from
+     * the assigned handler. Without these annotations, the compiler
+     * pulls in the FULL function type of the corresponding handlers/*.ts
+     * implementation (including every internally referenced type) into
+     * the generated .d.ts - this previously caused numerous
+     * "ae-forgotten-export" warnings from api-extractor, since those
+     * internal handler symbols would otherwise become part of the
+     * public API surface.
+     */
+    start: (group?: string) => Promise<true> = handleTourStart
+    visitStep: (stepIndex: number | "next" | "prev") => Promise<true> = handleVisitStep
+    addSteps: (steps: TourGuideStep[]) => Promise<void> = handleAddStep
+    nextStep: () => Promise<true> = handleVisitNextStep
+    prevStep: () => Promise<true> = handleVisitPrevStep
+    exit: () => Promise<true> = handleClose
+    refresh: () => Promise<true> = handleRefreshTour
+    refreshDialog: () => Promise<true> = handleRefreshDialog
+    finishTour: (exit?: boolean, tourGroup?: string) => Promise<boolean> = handleFinishTour
+    updatePositions: () => Promise<true> = computeTourPositions
+    deleteFinishedTour: (tourGroup?: string) => void = delFinishedTour
+    setOptions: (options: TourGuideOptions) => Promise<TourGuideClient> = handleSetOptions
 
 
     /**
      * Listeners
      */
-        // Init
-    initListeners = handleInitListeners
-    // Destroy
-    destroyListeners = handleDestroyListeners
-    // Track initialised eventListeners
+    initListeners: () => Promise<true> = handleInitListeners
+    destroyListeners: () => Promise<true> = handleDestroyListeners
+
+    /**
+     * @internal
+     * Read/written by listeners.ts (handleInitListeners/handleDestroyListeners).
+     */
     _trackedEvents = {
         nextBtnClickEvent: {
             initialized: false,
@@ -130,48 +171,86 @@ class TourGuideClient{
         },
         resizeEvent: {
             initialized: false,
-            fn: async function () {
-                await computeBackdropPosition(this);
-                await computeDialogPosition(this);
-            }.bind(this)
+            fn: debounce(async function (this: TourGuideClient) {
+                await computeBackdropPosition.call(this);
+                await computeDialogPosition.call(this);
+            }.bind(this), 100)
         },
         scrollEvent: {
             initialized: false,
-            fn: async function () {
-                await computeDialogPosition(this);
-            }.bind(this)
+            fn: debounce(async function (this: TourGuideClient) {
+                await computeDialogPosition.call(this);
+            }.bind(this), 100)
         },
     }
 
 
     /**
      * Callbacks
+     *
+     * @internal
+     * Assigned from core/callbacks.ts (handleOnFinish etc.) and read from
+     * handlers/*.ts (handleClose, handleFinishTour, handleVisitStep).
      */
-    _globalFinishCallback? : ()=>(void | Promise<unknown>)
-    _globalBeforeExitCallback? : ()=>(void | Promise<unknown>)
-    _globalAfterExitCallback? : Function
-    _globalBeforeChangeCallback? : (currentStepIndex: number, stepIndex: number)=>(void | Promise<unknown>)
-    _globalAfterChangeCallback? : (previousStepIndex: number, stepIndex: number)=>(void | Promise<unknown>)
+    _globalFinishCallback?: () => (void | Promise<unknown>)
+    _globalBeforeExitCallback?: () => (void | Promise<unknown>)
+    _globalAfterExitCallback?: () => (void | Promise<unknown>)
+    _globalBeforeChangeCallback?: (currentStepIndex: number, stepIndex: number) => (void | Promise<unknown>)
+    _globalAfterChangeCallback?: (previousStepIndex: number, stepIndex: number) => (void | Promise<unknown>)
 
     // FINISH
-    readonly onFinish = handleOnFinish
+    readonly onFinish: (callback: () => (void | Promise<unknown>)) => void = handleOnFinish
     // EXIT
-    readonly onBeforeExit = handleOnBeforeExit
-    readonly onAfterExit = handleOnAfterExit
+    readonly onBeforeExit: (callback: () => (void | Promise<unknown>)) => void = handleOnBeforeExit
+    readonly onAfterExit: (callback: () => (void | Promise<unknown>)) => void = handleOnAfterExit
     // STEP CHANGE
-    readonly onBeforeStepChange = handleOnBeforeStepChange
-    readonly onAfterStepChange = handleOnAfterStepChange
+    readonly onBeforeStepChange: (callback: (currentStepIndex: number, stepIndex: number) => (void | Promise<unknown>)) => void = handleOnBeforeStepChange
+    readonly onAfterStepChange: (callback: (previousStepIndex: number, stepIndex: number) => (void | Promise<unknown>)) => void = handleOnAfterStepChange
+
+    /**
+     * Removes a previously registered onFinish() callback.
+     * Prevents memory leaks on SPA route changes / component unmount,
+     * where a callback closure might reference stale state.
+     */
+    offFinish(): void {
+        this._globalFinishCallback = undefined
+    }
+
+    offBeforeExit(): void {
+        this._globalBeforeExitCallback = undefined
+    }
+
+    offAfterExit(): void {
+        this._globalAfterExitCallback = undefined
+    }
+
+    offBeforeStepChange(): void {
+        this._globalBeforeChangeCallback = undefined
+    }
+
+    offAfterStepChange(): void {
+        this._globalAfterChangeCallback = undefined
+    }
 }
 
-// Fn wrapper for script instantiation
-// *** Redundant ****
-// const createInstance = (options? : TourGuideOptions)=>{
-//     return new TourGuideClient(options)
-// }
-//
-// export default createInstance
-
-export {
-    // Client
-    TourGuideClient,
+/**
+ * Simple debounce utility for the resize/scroll listeners above.
+ */
+function debounce<T extends (...args: any[]) => void>(fn: T, wait: number = 100): (...args: Parameters<T>) => void {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    return function (this: unknown, ...args: Parameters<T>) {
+        if (timeoutId) clearTimeout(timeoutId)
+        timeoutId = setTimeout(() => {
+            fn.apply(this, args)
+        }, wait)
+    }
 }
+
+export {TourGuideClient}
+
+// Re-export types used in public method signatures. Without this,
+// api-extractor reports "ae-forgotten-export" for TourGuideOptions /
+// TourGuideStep, since they are referenced in Tour.d.ts but not
+// exported by the entry point itself.
+export type {TourGuideOptions} from "./core/options"
+export type {TourGuideStep} from "./types/TourGuideStep"

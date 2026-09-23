@@ -1,0 +1,13 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/api-extractor/v7/api-extractor.schema.json",
+  "mainEntryPointFilePath": "./dist/types/Tour.d.ts",
+  "compiler": {
+    "tsconfigFilePath": "./tsconfig.build.json"
+  },
+  "dtsRollup": {
+    "enabled": true,
+    "publicTrimmedFilePath": "./dist/tourguide.d.ts"
+  },
+  "docModel": { "enabled": false },
+  "apiReport": { "enabled": false }
+}

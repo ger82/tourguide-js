@@ -3,25 +3,35 @@ import {TourGuideClient} from "../Tour";
 /**
  * dotsWrapperHtmlString
  */
-function dotsWrapperHtmlString() : string{
-    const dotsWrapper = document.createElement('div')
-    dotsWrapper.classList.add('tg-dialog-dots')
-    dotsWrapper.id = 'tg-dialog-dots'
-    return dotsWrapper.outerHTML as string
+function dotsWrapperHtmlString(): string {
+    return `<div class="tg-dialog-dots" id="tg-dialog-dots"></div>`
 }
 
 /**
  * computeDots
- * @param tgInstance
+ *
+ * Renders the step-progress dots as an HTML string. Uses a simple
+ * memoization cache keyed by `activeStep:tourSteps.length` to avoid
+ * unnecessary recomputation on frequent calls (e.g. from debounced
+ * resize/scroll handlers).
+ *
+ * @this TourGuideClient
  */
-const computeDots = (tgInstance : TourGuideClient) : string =>{
+function computeDots(this: TourGuideClient): string {
+    if (!this.tourSteps.length) return ""
+
+    const cacheKey = `${this.activeStep}:${this.tourSteps.length}`
+    if (this._dotsCache?.key === cacheKey) {
+        return this._dotsCache.html
+    }
+
     let dotsHtml = ""
-    if(tgInstance.tourSteps.length) tgInstance.tourSteps.forEach((_, i)=>{
-        const dotSpan = document.createElement('span')
-        dotSpan.classList.add('tg-dot')
-        if(i === tgInstance.activeStep) dotSpan.classList.add('tg-dot-active')
-        dotsHtml += dotSpan.outerHTML
-    })
+    for (let i = 0; i < this.tourSteps.length; i++) {
+        const isActive = i === this.activeStep
+        dotsHtml += `<span class="tg-dot${isActive ? ' tg-dot-active' : ''}"></span>`
+    }
+
+    this._dotsCache = {key: cacheKey, html: dotsHtml}
     return dotsHtml
 }
 

@@ -1,191 +1,187 @@
 import {TourGuideClient} from "../Tour";
 import {updateDialogHtml} from "../core/dialog";
 import scrollToTarget from "../core/scrollTo";
+import handleFinishTour from "./handleFinishTour";
 
 /**
  * handleVisitStep
- * @param stepIndex
+ *
+ * Central entry point for step navigation. Manages the global
+ * navigation lock (`_navigationLock`) for the entire duration of the
+ * operation - regardless of whether it ends up calling `finishTour()`
+ * or `goToStep()`.
+ *
+ * @param stepIndex - Target index, or "next"/"prev" for relative navigation
  */
-async function handleVisitStep(this : TourGuideClient, stepIndex: "next" | "prev" | number) {
-    return new Promise(async (resolve, reject) => {
+async function handleVisitStep(this: TourGuideClient, stepIndex: "next" | "prev" | number): Promise<true> {
+    if (this._navigationLock) {
+        throw new Error("Promise waiting")
+    }
 
-        // Loading state
-        if(this._promiseWaiting) return reject("Promise waiting")
+    let targetIndex: number
+    if (stepIndex === "next") {
+        targetIndex = this.activeStep + 1
+    } else if (stepIndex === "prev") {
+        targetIndex = this.activeStep - 1
+    } else {
+        targetIndex = stepIndex
+    }
 
-        /**
-         * Convert next & prev string to stepIndex
-         */
-        if (typeof stepIndex === "string") {
-            if (stepIndex === "next") stepIndex = this.activeStep + 1
-            else stepIndex = this.activeStep - 1
+    this._navigationLock = true
+    try {
+        // Complete the tour if we've reached the end
+        if (targetIndex >= this.tourSteps.length) {
+            // Call the internal handler directly (instead of the public
+            // `this.finishTour(...)` property, which is intentionally
+            // limited to 2 parameters for the public API - see Tour.ts).
+            // The third, internal parameter signals to handleFinishTour
+            // that `_navigationLock` is already held by this call site
+            // (reentrancy guard instead of a deadlock).
+            await handleFinishTour.call(this, true, this.group, true)
+            return true
         }
 
-        /**
-         * Do completion if end of tour
-         */
-        if(stepIndex >= this.tourSteps.length){
-            await this.finishTour(true, this.group)
-            return
-        }
-
-        await goToStep(this, stepIndex as number).catch((e)=>{
-            return reject(e)
-        })
-
-        return resolve(true)
-    })
+        await goToStep.call(this, targetIndex)
+        return true
+    } finally {
+        this._navigationLock = false
+    }
 }
 
 /**
  * handleVisitNextStep
  */
-async function handleVisitNextStep(this : TourGuideClient) {
-    return new Promise(async (resolve, reject) => {
-        const stepIndex = this.activeStep + 1
-        try{
-            await this.visitStep(stepIndex)
-        } catch (e) {
-            return reject(e)
-        }
-        return resolve(true)
-    })
+async function handleVisitNextStep(this: TourGuideClient): Promise<true> {
+    return this.visitStep(this.activeStep + 1)
 }
 
 /**
  * handleVisitPrevStep
  */
-async function handleVisitPrevStep(this : TourGuideClient) {
-    return new Promise(async (resolve, reject) => {
-        const stepIndex = this.activeStep - 1
-        try{
-            await this.visitStep(stepIndex)
-        } catch (e) {
-            return reject(e)
-        }
-        return resolve(true)
-    })
+async function handleVisitPrevStep(this: TourGuideClient): Promise<true> {
+    return this.visitStep(this.activeStep - 1)
 }
 
 /**
  * goToStep
- * @param tgInstance
- * @param stepIndex
+ *
+ * Performs the actual step transition: lifecycle callbacks, target
+ * element resolution, dialog update, scrolling, positioning.
+ *
+ * @this TourGuideClient
+ * @param stepIndex - Target step index
  */
-function goToStep(tgInstance: TourGuideClient, stepIndex : number){
-    return new Promise(async (resolve, bail) => {
+async function goToStep(this: TourGuideClient, stepIndex: number): Promise<true> {
+    // Min/max bounds check
+    if (stepIndex >= this.tourSteps.length) {
+        throw new Error("End of tour steps")
+    }
+    if (stepIndex < 0) {
+        throw new Error("Start of tour steps")
+    }
 
-        /**
-         * Min/Max checks
-         */
-        // Ensure index stays in range of toursteps
-        if (stepIndex >= tgInstance.tourSteps.length) {
-            return bail("End of tour steps")
-        }
-        if (stepIndex < 0){
-            return bail("Start of tour steps")
-        }
+    const currentStepIndex = this.activeStep
+    const currentStep = this.tourSteps[currentStepIndex]
+    const nextStep = this.tourSteps[stepIndex]
+    if (!nextStep || !currentStep) {
+        throw new Error("Step not found by index")
+    }
 
-        /**
-         * Check step data
-         */
-        const currentStepIndex = tgInstance.activeStep
-        const currentStep = tgInstance.tourSteps[currentStepIndex]
-        const nextStep = tgInstance.tourSteps[stepIndex]
-        if (!nextStep || !currentStep) return bail("Step not found by index")
+    // Remove active class from current step
+    if (currentStep.target instanceof HTMLElement) {
+        currentStep.target.classList.remove('tg-active-element')
+    }
 
-        /** Clear active class from current step **/
-        if(currentStep.target) (currentStep.target as HTMLElement).classList.remove('tg-active-element');
+    const isActualStepChange = stepIndex !== currentStepIndex
+    const hasBeforeCallbacks = Boolean(
+        (this._globalBeforeChangeCallback && isActualStepChange) ||
+        currentStep.beforeLeave ||
+        nextStep.beforeEnter
+    )
 
+    // Only show loading feedback when async "before" work is actually
+    // expected (avoids flicker on fast/synchronous step changes without
+    // callbacks).
+    if (hasBeforeCallbacks) {
+        this.dialog.classList.add('tg-dialog-loading')
+    }
 
-        /** Before callbacks **/
-        // If any callbacks exist, set loading state
-        if(tgInstance._globalBeforeChangeCallback && stepIndex !== currentStepIndex || currentStep.beforeLeave || nextStep.beforeEnter){
-            tgInstance._promiseWaiting = true
-            tgInstance.dialog.classList.add('tg-dialog-loading')
-        }
-
-        // Before change callback - global
-        if(tgInstance._globalBeforeChangeCallback && stepIndex !== currentStepIndex){
-            try {
-                await tgInstance._globalBeforeChangeCallback(currentStepIndex, stepIndex)
-            } catch (e){
-                return bail(e)
-            }
-        }
-
-        // Before leave callback on current step
-        if (stepIndex !== currentStepIndex && currentStep.beforeLeave) {
-            try {
-                await currentStep.beforeLeave(currentStep, nextStep)
-            } catch (e){
-                return bail(e)
-            }
+    try {
+        // Global before-change callback
+        if (this._globalBeforeChangeCallback && isActualStepChange) {
+            await this._globalBeforeChangeCallback(currentStepIndex, stepIndex)
         }
 
-        // Before enter callback for next pending step
+        // Before-leave callback on the current step
+        if (isActualStepChange && currentStep.beforeLeave) {
+            await currentStep.beforeLeave(currentStep, nextStep)
+        }
+
+        // Before-enter callback for the pending next step
         if (nextStep.beforeEnter) {
-            try {
-                await nextStep.beforeEnter(currentStep, nextStep)
-            } catch (e){
-                return bail(e)
-            }
+            await nextStep.beforeEnter(currentStep, nextStep)
         }
 
         /**
-         * Sanitize step target to HTMLElement
+         * Sanitize step target to an HTMLElement
          */
-        // If target is string, query element by selector
-        if(typeof nextStep.target === "string") tgInstance.tourSteps[stepIndex].target = document.querySelector(nextStep.target as string)
-        // If target is empty or not found, set target to centered backdrop
-        // if(!nextStep.target) tgInstance.tourSteps[stepIndex].target = document.body
-        if(!nextStep.target || !tgInstance.tourSteps[stepIndex].target) tgInstance.tourSteps[stepIndex].target = document.body
-
+        if (typeof nextStep.target === "string") {
+            const found = document.querySelector(nextStep.target)
+            nextStep.target = found instanceof HTMLElement ? found : undefined
+        }
+        // Fall back to the centered backdrop if target is empty or invalid
+        if (!(nextStep.target instanceof HTMLElement)) {
+            nextStep.target = document.body
+        }
 
         /** Set active step **/
-        tgInstance.activeStep = Number(stepIndex)
+        this.activeStep = stepIndex
 
         /**
-         * Update tour guide HTML
+         * Update dialog HTML
          */
-        await updateDialogHtml(tgInstance).catch((e)=>{
-            if(tgInstance.options.debug) console.warn(e)
-            bail(e)
-        })
-
+        try {
+            await updateDialogHtml.call(this)
+        } catch (e) {
+            if (this.options.debug) console.warn(e)
+            throw e
+        }
 
         /**
-         * Scroll to target
+         * Scroll to target - awaited so backdrop/dialog positioning
+         * below is computed AFTER the scroll has actually settled.
          */
-        if (tgInstance.options.autoScroll && nextStep.target !== document.body) scrollToTarget(tgInstance, nextStep.target as HTMLElement)
-
+        if (this.options.autoScroll && nextStep.target !== document.body) {
+            await scrollToTarget.call(this, nextStep.target)
+        }
 
         /**
          * Update backdrop & dialog positions & display
          */
-        await tgInstance.updatePositions()
+        await this.updatePositions()
 
-
-        /** apply active element class **/
-        if(tgInstance.options.activeStepInteraction) (nextStep.target as HTMLElement).classList.add('tg-active-element')
-
+        /** Apply active-element class **/
+        if (this.options.activeStepInteraction) {
+            nextStep.target.classList.add('tg-active-element')
+        }
 
         /** After callbacks **/
-        // After leave callback for current step
-        if (stepIndex !== currentStepIndex && currentStep.afterLeave) await currentStep.afterLeave(currentStep, nextStep)
+        if (isActualStepChange && currentStep.afterLeave) {
+            await currentStep.afterLeave(currentStep, nextStep)
+        }
+        if (nextStep.afterEnter) {
+            await nextStep.afterEnter(currentStep, nextStep)
+        }
+        if (this._globalAfterChangeCallback && isActualStepChange) {
+            await this._globalAfterChangeCallback(currentStepIndex, stepIndex)
+        }
 
-        // After enter callback for next pending step (now the active step)
-        if (nextStep.afterEnter) await nextStep.afterEnter(currentStep, nextStep)
-
-        // After change callback - global
-        if(tgInstance._globalAfterChangeCallback && stepIndex !== currentStepIndex) await tgInstance._globalAfterChangeCallback(currentStepIndex, stepIndex)
-
-        // Clear loading state
-        tgInstance._promiseWaiting = false
-        tgInstance.dialog.classList.remove('tg-dialog-loading')
-
-        return resolve(true)
-
-    })
+        return true
+    } finally {
+        if (hasBeforeCallbacks) {
+            this.dialog.classList.remove('tg-dialog-loading')
+        }
+    }
 }
 
 export default handleVisitStep

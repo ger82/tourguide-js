@@ -3,30 +3,53 @@ import {computeBackdropPosition} from "./backdrop";
 import {computeDialogPosition} from "./dialog";
 
 /**
- * computeTourPositions
+ * Duration (ms) of the CSS transition for backdrop/dialog position
+ * changes. Must match the corresponding `transition` duration in the
+ * `.animate-position` CSS class.
  */
-function computeTourPositions(this : TourGuideClient){
-    return new Promise(async (resolve) => {
-        /**
-         * Update overlay position
-         */
-        this.backdrop.style.display = "block"
-        await computeBackdropPosition(this)
+const POSITION_ANIMATION_DURATION_MS = 300
 
-        /**
-         * Update dialog position
-         */
-        this.dialog.style.display = 'block'
-        if(this.options.dialogAnimate && this.isVisible) this.dialog.classList.add('animate-position') // add transition class
-        await computeDialogPosition(this)
-        if(this.options.dialogAnimate) setTimeout(()=>{this.dialog.classList.remove('animate-position')}, 300) // cancel after 300ms css transition complete
-        this.isVisible = true
+/**
+ * computeTourPositions
+ *
+ * Recomputes and applies backdrop and dialog positioning for the
+ * currently active step.
+ *
+ * @this TourGuideClient
+ */
+async function computeTourPositions(this: TourGuideClient): Promise<true> {
+    /**
+     * Update overlay position
+     */
+    this.backdrop.style.display = "block"
+    await computeBackdropPosition.call(this)
 
-        // Match timeout with CSS transition & smooth scroll
+    /**
+     * Update dialog position
+     */
+    this.dialog.style.display = 'block'
+
+    const shouldAnimate = this.options.dialogAnimate
+
+    if (shouldAnimate && this.isVisible) {
+        this.dialog.classList.add('animate-position') // add transition class
+    }
+
+    await computeDialogPosition.call(this)
+
+    this.isVisible = true
+
+    if (!shouldAnimate) {
+        // No transition active - resolve immediately without artificial delay
+        return true
+    }
+
+    // Match timeout with CSS transition & smooth scroll
+    return new Promise((resolve) => {
         setTimeout(() => {
-            return resolve(true)
-        }, 300)
-
+            this.dialog.classList.remove('animate-position') // cancel after CSS transition completes
+            resolve(true)
+        }, POSITION_ANIMATION_DURATION_MS)
     })
 }
 
